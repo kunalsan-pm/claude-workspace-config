@@ -1,0 +1,77 @@
+name: Notify Slack on config update
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Detect changed files
+        id: changes
+        run: |
+          CHANGED=$(git diff --name-only HEAD~1 HEAD)
+          echo "files<<EOF" >> $GITHUB_OUTPUT
+          echo "$CHANGED" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+          # Build a human-readable summary
+          SUMMARY=""
+          while IFS= read -r file; do
+            if [[ "$file" == "CLAUDE.md" ]]; then
+              SUMMARY="$SUMMARY\n• \`CLAUDE.md\`"
+            elif [[ "$file" == skills/*/SKILL.md ]]; then
+              skill=$(echo "$file" | cut -d'/' -f2)
+              SUMMARY="$SUMMARY\n• skill \`$skill\`"
+            elif [[ "$file" == agents/*.md ]]; then
+              agent=$(basename "$file" .md)
+              SUMMARY="$SUMMARY\n• agent \`$agent\`"
+            elif [[ "$file" == "install.sh" ]]; then
+              SUMMARY="$SUMMARY\n• \`install.sh\`"
+            fi
+          done <<< "$CHANGED"
+
+          echo "summary=$SUMMARY" >> $GITHUB_OUTPUT
+
+      - name: Send Slack notification
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          ACTOR: ${{ github.actor }}
+          COMMIT_MSG: ${{ github.event.head_commit.message }}
+          COMMIT_URL: ${{ github.event.head_commit.url }}
+        run: |
+          SUMMARY="${{ steps.changes.outputs.summary }}"
+
+          curl -s -X POST "$SLACK_WEBHOOK_URL" \
+            -H 'Content-type: application/json' \
+            --data "{
+              \"text\": \"*Claude config updated* by \`$ACTOR\`\",
+              \"blocks\": [
+                {
+                  \"type\": \"section\",
+                  \"text\": {
+                    \"type\": \"mrkdwn\",
+                    \"text\": \"*Claude config updated* by \`$ACTOR\`\n\n$SUMMARY\"
+                  }
+                },
+                {
+                  \"type\": \"section\",
+                  \"text\": {
+                    \"type\": \"mrkdwn\",
+                    \"text\": \"_$COMMIT_MSG_\n<$COMMIT_URL|View commit>\"
+                  }
+                },
+                {
+                  \"type\": \"section\",
+                  \"text\": {
+                    \"type\": \"mrkdwn\",
+                    \"text\": \"Run to update: \`cd ~/claude-workspace-config && git pull && ./install.sh\`\"
+                  }
+                }
+              ]
+            }"
